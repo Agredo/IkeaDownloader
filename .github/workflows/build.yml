@@ -70,7 +70,6 @@ jobs:
           tag_name: latest
           name: Latest Build
           prerelease: true
-          make_latest: true
           body: "Automatically built from the latest commit on `master`."
           files: |
             artifacts/ikea-dl-win-x64/ikea-dl.exe
@@ -85,3 +84,4 @@ jobs:
           files: |
             artifacts/ikea-dl-win-x64/ikea-dl.exe
             artifacts/ikea-dl-linux-x64/ikea-dl
+
