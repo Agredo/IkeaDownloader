@@ -25,12 +25,21 @@ if (outputDir is null)
 using var cts        = new CancellationTokenSource();
 using var downloader = new IkeaModelDownloader();
 
+// Print internal diagnostics so failures are visible during debugging
+downloader.DiagnosticCallback = msg =>
+{
+    var prev = Console.ForegroundColor;
+    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.WriteLine($"  [dbg] {msg}");
+    Console.ForegroundColor = prev;
+};
+
 // Allow Ctrl+C to cancel gracefully
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true;
     Console.WriteLine("\nCancelling…");
-    cts.Cancel();
+
 };
 
 bool firstRun = true;

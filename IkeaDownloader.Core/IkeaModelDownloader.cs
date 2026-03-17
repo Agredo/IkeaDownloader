@@ -12,6 +12,12 @@ namespace IkeaDownloader.Core;
 /// </summary>
 public sealed partial class IkeaModelDownloader : IDisposable
 {
+    private const string RoteraApiBase  = "https://web-api.ikea.com";
+    private const string RoteraClientId  = "4863e7d2-1428-4324-890b-ae5dede24fc6";
+
+    /// <summary>When set, receives internal diagnostic messages (e.g. for debug output).</summary>
+    public Action<string>? DiagnosticCallback { get; set; }
+
     private readonly HttpClient _http;
     private readonly IBrowsingContext _browsingContext = BrowsingContext.New(Configuration.Default);
     private bool _disposed;
@@ -55,6 +61,9 @@ public sealed partial class IkeaModelDownloader : IDisposable
         string productPageUrl,
         CancellationToken ct = default)
     {
+        var roteraUrl = await TryFetchRoteraModelUrlAsync(productPageUrl, ct, DiagnosticCallback).ConfigureAwait(false);
+        if (roteraUrl is not null) return roteraUrl;
+
         var html = await FetchPageAsync(productPageUrl, ct).ConfigureAwait(false);
         if (html is null) return null;
 
@@ -82,8 +91,9 @@ public sealed partial class IkeaModelDownloader : IDisposable
         // ── 2. Parse HTML (reused for both GLB extraction and file naming) ─
         using var document = await ParseHtmlAsync(html, ct).ConfigureAwait(false);
 
-        // ── 3. Locate GLB URL ──────────────────────────────────────────────
-        var glbUrl = ExtractGlbUrl(document, html);
+        // ── 3. Locate GLB URL — try Rotera API first, then HTML extraction ──
+        var glbUrl = await TryFetchRoteraModelUrlAsync(productPageUrl, ct, DiagnosticCallback).ConfigureAwait(false)
+                     ?? ExtractGlbUrl(document, html);
         if (glbUrl is null)
             return DownloadResult.Fail(
                 "No 3D model found on this page. " +
@@ -113,6 +123,55 @@ public sealed partial class IkeaModelDownloader : IDisposable
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Calls the IKEA Rotera 3D-viewer API to retrieve the GLB model URL directly.
+    /// Returns null if the URL does not match the expected IKEA pattern or the API call fails.
+    /// </summary>
+    private async Task<string?> TryFetchRoteraModelUrlAsync(
+        string productPageUrl,
+        CancellationToken ct,
+        Action<string>? onDiagnostic = null)
+    {
+        var m = IkeaProductUrlRegex().Match(productPageUrl);
+        if (!m.Success)
+        {
+            onDiagnostic?.Invoke("Rotera: URL did not match IKEA product URL pattern.");
+            return null;
+        }
+
+        var country   = m.Groups[1].Value;
+        var language  = m.Groups[2].Value;
+        var productId = m.Groups[3].Value;
+
+        var apiUrl = $"{RoteraApiBase}/{country}/{language}/rotera/data/model/{productId}/";
+        onDiagnostic?.Invoke($"Rotera: calling {apiUrl}");
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, apiUrl);
+            request.Headers.TryAddWithoutValidation("x-client-id", RoteraClientId);
+            request.Headers.TryAddWithoutValidation("Accept",      "application/json;version=2");
+            // Mimic the cross-origin headers a browser sets automatically when
+            // www.ikea.com's Rotera viewer calls web-api.ikea.com.
+            request.Headers.TryAddWithoutValidation("Origin",  "https://www.ikea.com");
+            request.Headers.TryAddWithoutValidation("Referer", "https://www.ikea.com/");
+
+            using var response = await _http.SendAsync(request, ct).ConfigureAwait(false);
+            onDiagnostic?.Invoke($"Rotera: HTTP {(int)response.StatusCode} {response.ReasonPhrase}");
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json     = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            onDiagnostic?.Invoke($"Rotera: response = {json}");
+            var urlMatch = RoteraModelUrlRegex().Match(json);
+            return urlMatch.Success ? Unescape(urlMatch.Groups[1].Value) : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            onDiagnostic?.Invoke($"Rotera: exception — {ex.Message}");
+            return null;
+        }
+    }
 
     private async Task<string?> FetchPageAsync(string url, CancellationToken ct)
     {
@@ -234,6 +293,19 @@ public sealed partial class IkeaModelDownloader : IDisposable
 
     [GeneratedRegex(@"/(\d{8,})[_/.]")]
     private static partial Regex ProductIdRegex();
+
+    // Extracts country, language and product ID from an IKEA product page URL.
+    // Examples:
+    //   https://www.ikea.com/de/de/p/kallax-regal-eicheneff-wlas-40409935/          (ART: digits only)
+    //   https://www.ikea.com/de/en/p/ivar-shelving-unit-with-storage-box-pine-s59403815/  (SET: letter + digits)
+    // The optional letter prefix (e.g. "s" for SET) is matched but NOT captured so
+    // the Rotera API always receives a pure numeric article number.
+    [GeneratedRegex(@"ikea\.com/([a-z]{2})/([a-z]{2})/p/[^/]+-[a-z]?(\d{5,})", RegexOptions.IgnoreCase)]
+    private static partial Regex IkeaProductUrlRegex();
+
+    // Extracts the modelUrl value from the Rotera API JSON response.
+    [GeneratedRegex(@"""modelUrl""\s*:\s*""(https?://[^""]+)""")]
+    private static partial Regex RoteraModelUrlRegex();
 
     // -----------------------------------------------------------------------
     // IDisposable
