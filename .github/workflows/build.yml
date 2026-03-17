@@ -51,7 +51,7 @@ jobs:
   release:
     name: Create release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     permissions:
@@ -63,9 +63,25 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create GitHub release
+      - name: Create rolling latest release (master push)
+        if: github.ref == 'refs/heads/master'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: Latest Build
+          prerelease: true
+          make_latest: true
+          body: "Automatically built from the latest commit on `master`."
+          files: |
+            artifacts/ikea-dl-win-x64/ikea-dl.exe
+            artifacts/ikea-dl-linux-x64/ikea-dl
+
+      - name: Create versioned release (tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          make_latest: true
           files: |
             artifacts/ikea-dl-win-x64/ikea-dl.exe
             artifacts/ikea-dl-linux-x64/ikea-dl
