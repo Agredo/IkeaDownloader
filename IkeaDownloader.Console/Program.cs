@@ -9,6 +9,19 @@ Console.WriteLine();
 // Optional: custom output directory as second argument
 string? outputDir = args.Length >= 2 ? args[1].Trim() : null;
 
+// ── Output directory (ask once on first start) ────────────────────────────
+if (outputDir is null)
+{
+    string defaultOutputDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+
+    Console.WriteLine($"  Save location (empty = {defaultOutputDir}):");
+    Console.Write("  > ");
+    var dirInput = Console.ReadLine()?.Trim() ?? string.Empty;
+    outputDir = string.IsNullOrWhiteSpace(dirInput) ? defaultOutputDir : dirInput;
+    Console.WriteLine();
+}
+
 using var cts        = new CancellationTokenSource();
 using var downloader = new IkeaModelDownloader();
 
@@ -52,8 +65,7 @@ while (!cts.IsCancellationRequested)
 
     // ── Download ───────────────────────────────────────────────────────
     Console.WriteLine($"  URL : {url}");
-    if (outputDir is not null)
-        Console.WriteLine($"  Dir : {outputDir}");
+    Console.WriteLine($"  Dir : {outputDir}");
     Console.WriteLine();
 
     try
