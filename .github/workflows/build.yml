@@ -71,7 +71,7 @@ jobs:
           name: Latest Build
           prerelease: true
           body: "Automatically built from the latest commit on `master`."
-          files: |
+          files: 
             artifacts/ikea-dl-win-x64/ikea-dl.exe
             artifacts/ikea-dl-linux-x64/ikea-dl
 
