@@ -1,3 +1,5 @@
+using AngleSharp;
+using AngleSharp.Dom;
 using System.Net;
 using System.Text.RegularExpressions;
 using IkeaDownloader.Core.Models;
@@ -6,11 +8,12 @@ namespace IkeaDownloader.Core;
 
 /// <summary>
 /// Downloads IKEA product 3D models (.glb) from product page URLs.
-/// Fully AOT-compatible — uses source-generated Regex, no reflection.
+/// AOT-compatible — AngleSharp for DOM queries, source-generated Regex for script-embedded URLs.
 /// </summary>
 public sealed partial class IkeaModelDownloader : IDisposable
 {
     private readonly HttpClient _http;
+    private readonly IBrowsingContext _browsingContext = BrowsingContext.New(Configuration.Default);
     private bool _disposed;
 
     public IkeaModelDownloader()
@@ -53,7 +56,10 @@ public sealed partial class IkeaModelDownloader : IDisposable
         CancellationToken ct = default)
     {
         var html = await FetchPageAsync(productPageUrl, ct).ConfigureAwait(false);
-        return html is null ? null : ExtractGlbUrl(html);
+        if (html is null) return null;
+
+        using var document = await ParseHtmlAsync(html, ct).ConfigureAwait(false);
+        return ExtractGlbUrl(document, html);
     }
 
     /// <summary>
@@ -73,14 +79,17 @@ public sealed partial class IkeaModelDownloader : IDisposable
             return DownloadResult.Fail(
                 "Could not retrieve the product page. Check the URL and your internet connection.");
 
-        // ── 2. Locate GLB URL ──────────────────────────────────────────────
-        var glbUrl = ExtractGlbUrl(html);
+        // ── 2. Parse HTML (reused for both GLB extraction and file naming) ─
+        using var document = await ParseHtmlAsync(html, ct).ConfigureAwait(false);
+
+        // ── 3. Locate GLB URL ──────────────────────────────────────────────
+        var glbUrl = ExtractGlbUrl(document, html);
         if (glbUrl is null)
             return DownloadResult.Fail(
                 "No 3D model found on this page. " +
                 "Make sure the product page has a 'View in 3D' button.");
 
-        // ── 3. Download binary ─────────────────────────────────────────────
+        // ── 4. Download binary ─────────────────────────────────────────────
         byte[] modelBytes;
         try
         {
@@ -91,9 +100,9 @@ public sealed partial class IkeaModelDownloader : IDisposable
             return DownloadResult.Fail($"Failed to download model file: {ex.Message}");
         }
 
-        // ── 4. Build file name & save ──────────────────────────────────────
+        // ── 5. Build file name & save ──────────────────────────────────────
         Directory.CreateDirectory(outputDirectory);
-        var fileName   = BuildFileName(html, glbUrl);
+        var fileName   = BuildFileName(document, glbUrl);
         var outputPath = Path.Combine(outputDirectory, fileName);
 
         await File.WriteAllBytesAsync(outputPath, modelBytes, ct).ConfigureAwait(false);
@@ -117,69 +126,85 @@ public sealed partial class IkeaModelDownloader : IDisposable
         }
     }
 
-    /// <summary>
-    /// Tries multiple patterns to extract a GLB URL from raw HTML.
-    /// Patterns are ordered from most specific to most generic.
-    /// </summary>
-    private static string? ExtractGlbUrl(string html)
-    {
-        // 1) <model-viewer src="..."> — most reliable
-        var m = ModelViewerSrcRegex().Match(html);
-        if (m.Success) return Unescape(m.Groups[1].Value);
+    private Task<IDocument> ParseHtmlAsync(string html, CancellationToken ct) =>
+        _browsingContext.OpenAsync(req => req.Content(html), ct);
 
-        // 2) JSON property:  "src":"https://…glb_draco…"
-        m = JsonGlbSrcRegex().Match(html);
-        if (m.Success) return Unescape(m.Groups[1].Value);
+    /// <summary>
+    /// Returns the first GLB URL found, working through strategies from most to least specific.
+    /// To adapt to IKEA page changes, add, remove, or reorder entries in <see cref="CandidateGlbUrls"/>.
+    /// </summary>
+    private static string? ExtractGlbUrl(IDocument document, string rawHtml) =>
+        CandidateGlbUrls(document, rawHtml)
+            .Select(Unescape)
+            .FirstOrDefault();
+
+    /// <summary>
+    /// Yields GLB URL candidates in priority order.
+    /// Each strategy targets a different way IKEA may embed the model URL.
+    /// </summary>
+    private static IEnumerable<string> CandidateGlbUrls(IDocument document, string rawHtml)
+    {
+        // 1) <model-viewer src="..."> — most reliable, direct DOM attribute
+        if (document.QuerySelector("model-viewer[src]")?.GetAttribute("src") is { } domSrc && IsGlbUrl(domSrc))
+            yield return domSrc;
+
+        // 2) JSON property embedded in a <script> block:  "src":"https://…glb_draco…"
+        if (JsonGlbSrcRegex().Match(rawHtml) is { Success: true } m2)
+            yield return m2.Groups[1].Value;
 
         // 3) Any quoted URL ending in .glb (with optional query string)
-        m = QuotedGlbUrlRegex().Match(html);
-        if (m.Success) return Unescape(m.Groups[1].Value);
+        if (QuotedGlbUrlRegex().Match(rawHtml) is { Success: true } m3)
+            yield return m3.Groups[1].Value;
 
-        // 4) Any quoted URL that contains glb_draco segment
-        m = QuotedDracoUrlRegex().Match(html);
-        if (m.Success) return Unescape(m.Groups[1].Value);
-
-        return null;
+        // 4) Any quoted URL containing the glb_draco CDN segment
+        if (QuotedDracoUrlRegex().Match(rawHtml) is { Success: true } m4)
+            yield return m4.Groups[1].Value;
     }
+
+    private static bool IsGlbUrl(string url) =>
+        url.Contains(".glb",       StringComparison.OrdinalIgnoreCase) ||
+        url.Contains("glb_draco", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Decode common JSON/JS escape sequences in URLs.</summary>
     private static string Unescape(string url) =>
         url.Replace("\\u002F", "/", StringComparison.OrdinalIgnoreCase)
            .Replace("\\/", "/");
 
-    private static string BuildFileName(string html, string glbUrl)
+    private static string BuildFileName(IDocument document, string glbUrl)
     {
-        // Product name + colour come from <title>Name, Colour - IKEA</title>
-        var titleMatch = PageTitleRegex().Match(html);
-        var productName = "ikea_product";
-        var colour      = string.Empty;
+        var (productName, colour) = ParseProductTitle(document);
 
-        if (titleMatch.Success)
-        {
-            // Title format:  "BILLY, white - IKEA"  or  "KALLAX - IKEA"
-            var raw   = titleMatch.Groups[1].Value.Trim();
-            var parts = raw.Split(" - IKEA", StringSplitOptions.RemoveEmptyEntries);
-            var nameParts = (parts.Length > 0 ? parts[0] : raw)
-                            .Split(',', 2, StringSplitOptions.TrimEntries);
+        var productId = ProductIdRegex().Match(glbUrl) is { Success: true } m
+            ? m.Groups[1].Value
+            : string.Empty;
 
-            productName = nameParts[0];
-            if (nameParts.Length > 1) colour = nameParts[1];
-        }
+        var nameParts = new[] { productName, colour, productId is { Length: > 0 } ? $"({productId})" : null }
+            .Where(part => !string.IsNullOrEmpty(part));
 
-        // Product article number extracted from GLB URL (e.g. /12345678_)
-        var idMatch   = ProductIdRegex().Match(glbUrl);
-        var productId = idMatch.Success ? idMatch.Groups[1].Value : string.Empty;
-
-        var name = productName;
-        if (!string.IsNullOrEmpty(colour))    name += " - " + colour;
-        if (!string.IsNullOrEmpty(productId)) name += " (" + productId + ")";
-
-        // Sanitize
-        foreach (var ch in Path.GetInvalidFileNameChars())
-            name = name.Replace(ch, '_');
-
-        return name + ".glb";
+        return SanitizeFileName(string.Join(" - ", nameParts)) + ".glb";
     }
+
+    /// <summary>
+    /// Parses the page title into product name and colour.
+    /// Expected formats: "BILLY, white - IKEA"  or  "KALLAX - IKEA"
+    /// </summary>
+    private static (string productName, string colour) ParseProductTitle(IDocument document)
+    {
+        var withoutBrand = (document.Title ?? string.Empty)
+            .Trim()
+            .Split(" - IKEA", 2, StringSplitOptions.None)[0];
+
+        var nameParts = withoutBrand.Split(',', 2, StringSplitOptions.TrimEntries);
+
+        return (
+            productName: nameParts.ElementAtOrDefault(0) is { Length: > 0 } n ? n : "ikea_product",
+            colour:      nameParts.ElementAtOrDefault(1) ?? string.Empty
+        );
+    }
+
+    private static string SanitizeFileName(string name) =>
+        Path.GetInvalidFileNameChars()
+            .Aggregate(name, (current, ch) => current.Replace(ch, '_'));
 
     private static string GetDownloadsFolder()
     {
@@ -191,11 +216,6 @@ public sealed partial class IkeaModelDownloader : IDisposable
     // -----------------------------------------------------------------------
     // Source-generated Regex  (AOT-safe, zero reflection)
     // -----------------------------------------------------------------------
-
-    [GeneratedRegex(
-        @"<model-viewer[^>]+\bsrc=""(https?://[^""]+(?:\.glb|glb_draco)[^""]*)""",
-        RegexOptions.IgnoreCase | RegexOptions.Singleline)]
-    private static partial Regex ModelViewerSrcRegex();
 
     [GeneratedRegex(
         @"""src""\s*:\s*""(https?://[^""]*(?:\.glb|glb_draco)[^""]*)""",
@@ -212,9 +232,6 @@ public sealed partial class IkeaModelDownloader : IDisposable
         RegexOptions.IgnoreCase)]
     private static partial Regex QuotedDracoUrlRegex();
 
-    [GeneratedRegex(@"<title>([^<]+)</title>", RegexOptions.IgnoreCase)]
-    private static partial Regex PageTitleRegex();
-
     [GeneratedRegex(@"/(\d{8,})[_/.]")]
     private static partial Regex ProductIdRegex();
 
@@ -227,5 +244,6 @@ public sealed partial class IkeaModelDownloader : IDisposable
         if (_disposed) return;
         _disposed = true;
         _http.Dispose();
+        _browsingContext.Dispose();
     }
 }

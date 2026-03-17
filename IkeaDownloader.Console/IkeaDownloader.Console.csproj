@@ -21,6 +21,15 @@
     <IlcTrimMetadata>true</IlcTrimMetadata>
     <StripSymbols>true</StripSymbols>
 
+    <!-- ── Unused runtime features (safe to remove for a CLI downloader) -->
+    <DebuggerSupport>false</DebuggerSupport>
+    <EventSourceSupport>false</EventSourceSupport>
+    <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+    <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <EnableUnsafeUTF7Encoding>false</EnableUnsafeUTF7Encoding>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <StackTraceSupport>false</StackTraceSupport>
+
     <!-- ── Trim ───────────────────────────────────────────────────────── -->
     <TrimmerRootDescriptor>trimmer-roots.xml</TrimmerRootDescriptor>
   </PropertyGroup>
