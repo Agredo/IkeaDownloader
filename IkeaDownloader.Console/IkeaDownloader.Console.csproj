@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>preview</LangVersion>
+    <AssemblyName>ikea-dl</AssemblyName>
+
+    <!-- ── AOT ────────────────────────────────────────────────────────── -->
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <!-- ── Globalisation: invariant keeps binary small, sufficient for URLs -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- ── Size optimisation ──────────────────────────────────────────── -->
+    <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+    <IlcFoldIdenticalMethodBodies>true</IlcFoldIdenticalMethodBodies>
+    <IlcTrimMetadata>true</IlcTrimMetadata>
+    <StripSymbols>true</StripSymbols>
+
+    <!-- ── Trim ───────────────────────────────────────────────────────── -->
+    <TrimmerRootDescriptor>trimmer-roots.xml</TrimmerRootDescriptor>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\IkeaDownloader.Core\IkeaDownloader.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,11 @@
+<linker>
+  <!-- Keep HttpClient and related infrastructure when trimming -->
+  <assembly fullname="System.Net.Http">
+    <type fullname="System.Net.Http.HttpClient" preserve="all" />
+    <type fullname="System.Net.Http.HttpClientHandler" preserve="all" />
+    <type fullname="System.Net.Http.SocketsHttpHandler" preserve="all" />
+  </assembly>
+  <assembly fullname="System.Net.Security">
+    <type fullname="System.Net.Security.SslStream" preserve="all" />
+  </assembly>
+</linker>

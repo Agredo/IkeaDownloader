@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="IkeaDownloader.Core/IkeaDownloader.Core.csproj" />
+  <Project Path="IkeaDownloader.Console/IkeaDownloader.Console.csproj" />
+</Solution>
